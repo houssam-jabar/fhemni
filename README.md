@@ -4,6 +4,10 @@
 
 The professor speaks French into a laptop. Each student scans a QR code and reads the lecture **live on their phone, in their own language** (English, Arabic, Spanish, German, Chinese). When the class ends, every student gets an **AI-written summary** of the lecture in their language.
 
+![Fhemni live demo: French speech recognized and translated in real time](docs/demo.gif)
+
+*Live demo (30 s): the professor dashboard shows each French sentence forming in real time, then finalized with its English, Arabic and Spanish translations, which are pushed to students' phones at the same moment.*
+
 Built entirely on **Microsoft Azure** with serverless and managed AI services. No virtual machines, and close to €0 when idle.
 
 ## Architecture
