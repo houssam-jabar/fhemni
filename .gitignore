@@ -1,0 +1,8 @@
+local.settings.json
+.venv/
+__pycache__/
+*.zip
+.python_packages/
+.fhemni.env
+api/local.settings.json
+.DS_Store

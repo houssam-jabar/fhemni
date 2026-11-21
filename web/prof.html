@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fhemni – Professeur</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@1.53.0/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Espace professeur</span></div></header>
+<main>
+  <h1>Tableau de bord du cours</h1>
+  <p class="sub">Parlez en français : les étudiants reçoivent la traduction en direct sur leur téléphone.</p>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Session</h2>
+        <label for="session">Code du cours</label>
+        <input id="session" type="text" autocomplete="off">
+        <label for="code">Code professeur</label>
+        <input id="code" type="password" autocomplete="off" placeholder="fourni par l'équipe Fhemni">
+        <label>Langues de traduction</label>
+        <div class="langs" id="langs">
+          <label><input type="checkbox" value="en" checked> Anglais</label>
+          <label><input type="checkbox" value="ar" checked> Arabe</label>
+          <label><input type="checkbox" value="es" checked> Espagnol</label>
+          <label><input type="checkbox" value="de"> Allemand</label>
+          <label><input type="checkbox" value="zh-Hans"> Chinois</label>
+        </div>
+        <div class="row">
+          <button class="primary" id="start">Démarrer</button>
+          <button id="stop" disabled>Pause</button>
+        </div>
+        <div class="row"><button class="gold" id="end">Terminer et générer le résumé</button></div>
+        <p class="status" id="status">Prêt.</p>
+      </div>
+      <div class="card">
+        <h2>Accès étudiants</h2>
+        <div id="qr"></div>
+        <p class="small"><a id="studentLink" target="_blank"></a></p>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h2>En direct</h2>
+        <div class="partial" id="partial">—</div>
+        <div class="history" id="history"></div>
+      </div>
+      <div class="card" id="summaryCard" hidden>
+        <h2>Résumé du cours (AI Language)</h2>
+        <p class="summary" id="summary"></p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = window.FHEMNI_API;
+const $ = id => document.getElementById(id);
+let recognizer = null, tokenTimer = null, running = false, retries = 0, reconnectPending = false, lastPartial = 0;
+
+const d = new Date();
+$("session").value = `cours-${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${Math.random().toString(36).slice(2, 5)}`;
+try { $("code").value = sessionStorage.getItem("fhemniProfCode") || ""; } catch (e) {}
+
+function status(text, kind) { $("status").textContent = text; $("status").className = "status " + (kind || ""); }
+function session() { return $("session").value.trim().toLowerCase(); }
+function headers() { return { "Content-Type": "application/json", "x-prof-code": $("code").value }; }
+function targets() { return [...document.querySelectorAll("#langs input:checked")].map(i => i.value); }
+
+function showStudentLink() {
+  const url = new URL("etudiant.html", location.href);
+  url.searchParams.set("s", session());
+  $("studentLink").href = url.toString(); $("studentLink").textContent = url.toString();
+  $("qr").innerHTML = "";
+  if (window.QRCode) new QRCode($("qr"), { text: url.toString(), width: 180, height: 180 });
+}
+$("session").addEventListener("input", showStudentLink);
+showStudentLink();
+
+async function getToken() {
+  const r = await fetch(`${API}/speech-token`, { headers: headers() });
+  if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+  return r.json();
+}
+
+function sendCaption(texts, partial) {
+  fetch(`${API}/caption`, { method: "POST", headers: headers(),
+    body: JSON.stringify({ session: session(), texts, partial: !!partial }) })
+    .then(async r => { if (!r.ok && !partial) status("Envoi refusé : " + ((await r.json()).error || r.status), "err"); })
+    .catch(e => { if (!partial) status("Envoi impossible : " + e.message, "err"); });
+}
+
+function collect(result, SDK) {
+  const texts = { fr: result.text };
+  targets().forEach(l => { texts[l] = result.translations.get(l) || ""; });
+  return texts;
+}
+
+function addHistory(texts) {
+  const p = document.createElement("p");
+  p.innerHTML = `<span></span>` + Object.keys(texts).filter(k => k !== "fr")
+    .map(k => `<small dir="${k === "ar" ? "rtl" : "ltr"}" data-l="${k}"></small>`).join("");
+  p.querySelector("span").textContent = texts.fr;
+  p.querySelectorAll("small").forEach(s => { s.textContent = `${s.dataset.l} : ${texts[s.dataset.l]}`; });
+  $("history").prepend(p);
+}
+
+$("start").onclick = () => {
+  if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Code du cours : 3 à 40 caractères (minuscules, chiffres, tirets).", "err");
+  try { sessionStorage.setItem("fhemniProfCode", $("code").value); } catch (e) {}
+  running = true; retries = 0;
+  $("start").disabled = true; $("stop").disabled = false;
+  startRecognition();
+};
+
+// Reconnexion automatique si la connexion à AI Speech tombe (réseau, veille, jeton expiré)
+function reconnect(reason) {
+  if (!running || reconnectPending) return;
+  reconnectPending = true;
+  clearInterval(tokenTimer);
+  const old = recognizer; recognizer = null;
+  if (old) { try { old.close(); } catch (e) {} }
+  retries += 1;
+  const delay = Math.min(1000 * retries, 10000);
+  status(`Connexion perdue (${reason}) : reprise dans ${delay / 1000} s…`, "err");
+  setTimeout(() => { reconnectPending = false; if (running) startRecognition(); }, delay);
+}
+
+async function startRecognition() {
+  status("Connexion à AI Speech…");
+  try {
+    const t = await getToken().catch(e => { e.fatal = /professeur/i.test(e.message); throw e; });
+    const SDK = window.SpeechSDK;
+    const config = SDK.SpeechTranslationConfig.fromAuthorizationToken(t.token, t.region);
+    config.speechRecognitionLanguage = "fr-FR";
+    // Silence nécessaire pour clore une phrase : 1,3 s au lieu de ~0,5 s par défaut,
+    // pour ne plus couper la phrase quand le professeur reprend son souffle.
+    config.setProperty(SDK.PropertyId.Speech_SegmentationSilenceTimeoutMs, "1300");
+    targets().forEach(l => config.addTargetLanguage(l));
+    recognizer = new SDK.TranslationRecognizer(config, SDK.AudioConfig.fromDefaultMicrophoneInput());
+
+    // Phrase en cours : affichée ici et envoyée aux téléphones au plus une fois par seconde
+    recognizer.recognizing = (s, e) => {
+      $("partial").textContent = e.result.text;
+      const now = Date.now();
+      if (now - lastPartial > 1000 && e.result.text) { lastPartial = now; sendCaption(collect(e.result, SDK), true); }
+    };
+    // Phrase définitive : historique + transcription
+    recognizer.recognized = (s, e) => {
+      if (e.result.reason !== SDK.ResultReason.TranslatedSpeech || !e.result.text) return;
+      const texts = collect(e.result, SDK);
+      $("partial").textContent = "—"; lastPartial = 0;
+      addHistory(texts); sendCaption(texts, false);
+    };
+    recognizer.canceled = (s, e) => { if (e.reason === SDK.CancellationReason.Error) reconnect("code " + e.errorCode); };
+    recognizer.sessionStopped = () => { if (running) reconnect("session terminée"); };
+
+    tokenTimer = setInterval(async () => {
+      try { if (recognizer) recognizer.authorizationToken = (await getToken()).token; } catch (e) { console.warn(e); }
+    }, 9 * 60 * 1000);
+
+    recognizer.startContinuousRecognitionAsync(
+      () => { retries = 0; status("En direct : parlez dans le micro.", "ok"); },
+      err => reconnect("démarrage : " + err));
+  } catch (e) {
+    if (e.fatal) { stop(); return status("Erreur : " + e.message, "err"); }
+    reconnect(e.message);
+  }
+}
+
+function stop() {
+  running = false;
+  clearInterval(tokenTimer);
+  const r = recognizer; recognizer = null;
+  if (r) r.stopContinuousRecognitionAsync(() => r.close(), () => r.close());
+  $("start").disabled = false; $("stop").disabled = true;
+}
+$("stop").onclick = () => { stop(); status("En pause."); };
+
+$("end").onclick = async () => {
+  stop();
+  status("Génération du résumé par AI Language…");
+  try {
+    const r = await fetch(`${API}/end-session`, { method: "POST", headers: headers(),
+      body: JSON.stringify({ session: session() }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    status("Résumé envoyé aux étudiants : " + Object.entries(data.languages).map(([k, v]) => `${k} ${v}`).join(", "), "ok");
+    const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=fr`).then(x => x.json());
+    $("summary").textContent = s.summary || "Résumé vide : la transcription est peut-être trop courte.";
+    $("summaryCard").hidden = false;
+  } catch (e) { status("Résumé impossible : " + e.message, "err"); }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "PROF_CODE": "choisir-un-code-secret",
+    "SPEECH_KEY": "",
+    "SPEECH_REGION": "francecentral",
+    "WEBPUBSUB_CONNECTION": "",
+    "STORAGE_CONNECTION": "",
+    "LANGUAGE_ENDPOINT": "",
+    "LANGUAGE_KEY": ""
+  },
+  "Host": {
+    "CORS": "*"
+  }
+}

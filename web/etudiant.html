@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fhemni – Étudiant</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Espace étudiant</span></div></header>
+<main>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Rejoindre un cours</h2>
+        <label for="session">Code du cours</label>
+        <input id="session" type="text" autocomplete="off">
+        <label for="lang">Ma langue</label>
+        <select id="lang">
+          <option value="fr">Français (original)</option>
+          <option value="en">English</option>
+          <option value="ar">العربية</option>
+          <option value="es">Español</option>
+          <option value="de">Deutsch</option>
+          <option value="zh-Hans">中文</option>
+        </select>
+        <div class="row"><button class="primary" id="join">Rejoindre</button><button id="sumBtn">Voir le résumé</button></div>
+        <p class="status" id="status">Non connecté.</p>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h2>Sous-titres en direct</h2>
+        <div class="live" id="live">En attente du professeur…</div>
+        <div class="partial" id="partial"></div>
+        <div class="history" id="history"></div>
+      </div>
+      <div class="card" id="summaryCard" hidden>
+        <h2>Résumé du cours</h2>
+        <p class="summary" id="summary"></p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = window.FHEMNI_API;
+const $ = id => document.getElementById(id);
+const lines = [];
+let ws = null, wanted = false, retry = 1000, partialLine = null;
+
+const params = new URLSearchParams(location.search);
+$("session").value = params.get("s") || "";
+try { $("lang").value = localStorage.getItem("fhemniLang") || "fr"; } catch (e) {}
+
+function status(text, kind) { $("status").textContent = text; $("status").className = "status " + (kind || ""); }
+function lang() { return $("lang").value; }
+function session() { return $("session").value.trim().toLowerCase(); }
+function textOf(line) { return line.texts[lang()] || line.texts.fr || ""; }
+function dir() { return lang() === "ar" ? "rtl" : "ltr"; }
+
+function render() {
+  ["live", "partial", "history", "summary"].forEach(id => { $(id).dir = dir(); });
+  const last = lines.at(-1);
+  $("live").textContent = last ? textOf(last) : "En attente du professeur…";
+  $("partial").textContent = partialLine ? textOf(partialLine) : "";
+  $("history").innerHTML = "";
+  lines.slice(0, -1).reverse().slice(0, 30).forEach(l => {
+    const p = document.createElement("p"); p.textContent = textOf(l); $("history").append(p);
+  });
+}
+
+async function loadSummary(manual) {
+  if (!session()) return;
+  try {
+    const r = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${encodeURIComponent(lang())}`);
+    if (!r.ok) { if (manual) status("Le résumé n'est pas encore disponible.", "err"); return; }
+    const { summary } = await r.json();
+    $("summary").textContent = summary || "Résumé indisponible dans cette langue.";
+    $("summaryCard").hidden = false; render();
+  } catch (e) { if (manual) status("Résumé impossible : " + e.message, "err"); }
+}
+
+async function connect() {
+  status("Connexion…");
+  try {
+    const r = await fetch(`${API}/negotiate?session=${encodeURIComponent(session())}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    ws = new WebSocket(data.url, "json.webpubsub.azure.v1");
+    ws.onopen = () => { retry = 1000; status("En direct : cours " + session(), "ok"); render(); loadSummary(false); };
+    ws.onmessage = ev => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type !== "message" || msg.from !== "group") return;
+      const data = msg.data;
+      if (data.type === "partial") { partialLine = data; render(); }
+      if (data.type === "caption") { partialLine = null; lines.push(data); render(); }
+      if (data.type === "summary-ready") loadSummary(false);
+    };
+    ws.onclose = () => {
+      if (!wanted) return;
+      status("Connexion perdue, reconnexion…", "err");
+      setTimeout(connect, retry); retry = Math.min(retry * 2, 15000);
+    };
+  } catch (e) {
+    status("Impossible de rejoindre : " + e.message, "err");
+    if (wanted) { setTimeout(connect, retry); retry = Math.min(retry * 2, 15000); }
+  }
+}
+
+$("join").onclick = () => {
+  if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Entrez le code du cours donné par le professeur.", "err");
+  wanted = true; if (ws) { ws.onclose = null; ws.close(); } connect();
+};
+$("sumBtn").onclick = () => loadSummary(true);
+$("lang").onchange = () => {
+  try { localStorage.setItem("fhemniLang", lang()); } catch (e) {}
+  render(); if (!$("summaryCard").hidden) loadSummary(false);
+};
+if (session()) $("join").click();
+</script>
+</body>
+</html>
