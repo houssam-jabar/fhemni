@@ -27,7 +27,9 @@
           <option value="fr-FR">French</option>
           <option value="en-US">English</option>
           <option value="ar-MA">Darija (Moroccan Arabic)</option>
+          <option value="auto">Auto-detect: French + English</option>
         </select>
+        <p class="hint">Auto-detect follows you sentence by sentence when you switch between French and English. For Darija, choose Darija.</p>
         <label>Languages offered to students</label>
         <div class="langs" id="langs">
           <label><input type="checkbox" value="fr" checked> French</label>
@@ -89,10 +91,17 @@ function status(text, kind) { $("status").textContent = text; $("status").classN
 function session() { return $("session").value.trim().toLowerCase(); }
 function headers() { return { "Content-Type": "application/json", "x-prof-code": $("code").value }; }
 // Language spoken by the teacher (e.g. "en-US") and its short code (e.g. "en")
+const AUTO_LANGS = ["fr-FR", "en-US"];   // continuous language identification (one language per sentence)
+let lastLocale = "fr-FR";                 // last language detected in auto mode
 function srcLang() { return $("srcLang").value || "fr-FR"; }
-function srcBase() { return srcLang().split("-")[0]; }
+function isAuto() { return srcLang() === "auto"; }
+function srcBase() { return (isAuto() ? lastLocale : srcLang()).split("-")[0]; }
+function ticked() { return [...document.querySelectorAll("#langs input:checked")].map(i => i.value); }
+// Language of the summary and notebook shown on this page
+function viewBase() { if (!isAuto()) return srcBase(); const t = ticked(); return t.includes("en") ? "en" : (t[0] || srcBase()); }
 // Translation targets: the ticked languages, except the spoken one (which is the original text)
-function targets() { return [...document.querySelectorAll("#langs input:checked")].map(i => i.value).filter(l => l !== srcBase()); }
+// In auto mode the spoken language changes, so every ticked language is a translation target
+function targets() { return isAuto() ? ticked() : ticked().filter(l => l !== srcBase()); }
 function newId() { seq += 1; return `${Date.now().toString(36)}-${seq}`; }
 
 function showStudentLink() {
@@ -132,8 +141,9 @@ function sendStatus(state) {   // tells the phones "paused" or "live", and marks
 
 function collect(result, SDK) {
   // The original text is stored under the spoken language; it is always the first key
-  const texts = { [srcBase()]: result.text };
-  targets().forEach(l => { texts[l] = result.translations.get(l) || ""; });
+  if (isAuto() && result.language) lastLocale = result.language;   // e.g. "en-US", detected for this sentence
+  const base = srcBase(), texts = { [base]: result.text };
+  targets().forEach(l => { if (l !== base) texts[l] = result.translations.get(l) || ""; });
   return texts;
 }
 
@@ -217,12 +227,20 @@ async function startRecognition(resumed) {
     const t = await getToken().catch(e => { e.fatal = /teacher/i.test(e.message); throw e; });
     const SDK = window.SpeechSDK;
     const config = SDK.SpeechTranslationConfig.fromAuthorizationToken(t.token, t.region);
-    config.speechRecognitionLanguage = srcLang();   // fr-FR, en-US or ar-MA
+    if (!isAuto()) config.speechRecognitionLanguage = srcLang();   // fr-FR, en-US or ar-MA
     // 1.3 s of silence ends a sentence (instead of ~0.5 s by default),
     // so sentences are no longer cut when the teacher takes a breath.
     config.setProperty(SDK.PropertyId.Speech_SegmentationSilenceTimeoutMs, "1300");
     targets().forEach(l => config.addTargetLanguage(l));
-    recognizer = new SDK.TranslationRecognizer(config, SDK.AudioConfig.fromDefaultMicrophoneInput());
+    const audio = SDK.AudioConfig.fromDefaultMicrophoneInput();
+    if (isAuto()) {
+      // AI Speech identifies French or English for each sentence, then translates it
+      const lid = SDK.AutoDetectSourceLanguageConfig.fromLanguages(AUTO_LANGS);
+      lid.mode = SDK.LanguageIdMode.Continuous;
+      recognizer = SDK.TranslationRecognizer.FromConfig(config, lid, audio);
+    } else {
+      recognizer = new SDK.TranslationRecognizer(config, audio);
+    }
 
     // Sentence in progress: shown here and sent to the phones at most once per second
     recognizer.recognizing = (s, e) => {
@@ -278,9 +296,9 @@ $("end").onclick = async () => {
     if (!r.ok) throw new Error(data.error || r.statusText);
     try { sessionStorage.removeItem("fhemniSession"); } catch (e) {}
     status("Summary and notebook sent to the students: " + Object.entries(data.languages).map(([k, v]) => `${k} ${v}`).join(", "), "ok");
-    const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${srcBase()}`).then(x => x.json());
+    const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${viewBase()}`).then(x => x.json());
     $("summary").textContent = s.summary || "Empty summary: the transcript may be too short.";
-    $("dlNotebook").href = `${API}/notebook?session=${encodeURIComponent(session())}&lang=${srcBase()}`;
+    $("dlNotebook").href = `${API}/notebook?session=${encodeURIComponent(session())}&lang=${viewBase()}`;
     $("summaryCard").hidden = false;
   } catch (e) { status("Summary failed: " + e.message, "err"); }
 };

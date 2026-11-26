@@ -6,7 +6,7 @@ The teacher speaks French, English or Moroccan Darija into a laptop. Each studen
 
 **Features**
 
-- Teacher chooses the spoken language: French, English or Darija (`fr-FR`, `en-US`, `ar-MA`).
+- Teacher chooses the spoken language: French, English or Darija (`fr-FR`, `en-US`, `ar-MA`), or **auto-detect** to switch freely between French and English: AI Speech identifies the language of each sentence (continuous language identification).
 - **Pause / resume** (button or Space bar) for a phone call or a private chat: nothing is heard or recorded, the AI Speech connection stays open, students see a "paused" banner and the break is marked in the notebook.
 - Before the summary, the teacher can **untick any sentence** (off-topic remark, recognition error): it is left out of the summary and the notebook.
 - Students download a **lecture notebook** (summary + time-stamped sentences, in their language); the teacher can download the raw **JSON Lines transcript** in all languages.
