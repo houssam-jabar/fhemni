@@ -78,7 +78,9 @@ let recognizer = null, tokenTimer = null, running = false, paused = false, retri
 const excluded = new Set();   // sentences the teacher removed before the summary
 
 const d = new Date();
-$("session").value = `lecture-${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${Math.random().toString(36).slice(2, 6)}`;
+// The lecture code is kept if the page is reloaded during the lecture (same tab), and renewed after "End lecture"
+let savedSession = ""; try { savedSession = sessionStorage.getItem("fhemniSession") || ""; } catch (e) {}
+$("session").value = savedSession || `lecture-${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${Math.random().toString(36).slice(2, 6)}`;
 try { $("code").value = sessionStorage.getItem("fhemniProfCode") || ""; } catch (e) {}
 try { $("srcLang").value = localStorage.getItem("fhemniSrcLang") || "fr-FR"; } catch (e) {}
 $("srcLang").addEventListener("change", () => { try { localStorage.setItem("fhemniSrcLang", srcLang()); } catch (e) {} });
@@ -156,7 +158,7 @@ function addMark(text) {
 
 $("start").onclick = () => {
   if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Lecture code: 3 to 40 characters (lowercase letters, digits, hyphens).", "err");
-  try { sessionStorage.setItem("fhemniProfCode", $("code").value); } catch (e) {}
+  try { sessionStorage.setItem("fhemniProfCode", $("code").value); sessionStorage.setItem("fhemniSession", session()); } catch (e) {}
   const resuming = paused;
   running = true; paused = false; retries = 0; setButtons();
   if (resuming && recognizer) {
@@ -189,8 +191,15 @@ document.addEventListener("keydown", e => {
   if (running) pause(); else if (paused) $("start").click();
 });
 
+// Microphone refused or missing: retrying is useless, the teacher has to allow it
+function micProblem(text) { return /microphone|getUserMedia|NotAllowed|NotFound|permission|audio source/i.test(String(text || "")); }
+
 // Automatic reconnection if the AI Speech connection drops (network, sleep, expired token)
 function reconnect(reason) {
+  if (micProblem(reason)) {
+    stop();
+    return status("Microphone unavailable: allow the microphone for this site (or open the page in Chrome or Safari), then click Start.", "err");
+  }
   if (!running || reconnectPending) return;
   reconnectPending = true;
   clearInterval(tokenTimer);
@@ -229,7 +238,7 @@ async function startRecognition(resumed) {
       $("partial").textContent = "—"; lastPartial = 0;
       addHistory(texts, id); sendCaption(texts, false, id);
     };
-    recognizer.canceled = (s, e) => { if (e.reason === SDK.CancellationReason.Error) reconnect("code " + e.errorCode); };
+    recognizer.canceled = (s, e) => { if (e.reason === SDK.CancellationReason.Error) reconnect(`code ${e.errorCode} ${e.errorDetails || ""}`.trim()); };
     recognizer.sessionStopped = () => { if (running) reconnect("session stopped"); };
 
     clearInterval(tokenTimer);   // the token expires after 10 min: renewed every 9 min, also during a pause
@@ -265,7 +274,9 @@ $("end").onclick = async () => {
       body: JSON.stringify({ session: session(), exclude: [...excluded],
         tz: Intl.DateTimeFormat().resolvedOptions().timeZone }) });
     const data = await r.json();
+    if (r.status === 404) return status("Nothing has been recorded for this lecture yet: click Start, speak until your sentences appear under Live, then end the lecture.", "err");
     if (!r.ok) throw new Error(data.error || r.statusText);
+    try { sessionStorage.removeItem("fhemniSession"); } catch (e) {}
     status("Summary and notebook sent to the students: " + Object.entries(data.languages).map(([k, v]) => `${k} ${v}`).join(", "), "ok");
     const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${srcBase()}`).then(x => x.json());
     $("summary").textContent = s.summary || "Empty summary: the transcript may be too short.";
