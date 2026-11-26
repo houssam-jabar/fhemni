@@ -18,7 +18,7 @@
         <input id="session" type="text" autocomplete="off">
         <label for="lang">Ma langue</label>
         <select id="lang">
-          <option value="fr">Français (original)</option>
+          <option value="fr">Français</option>
           <option value="en">English</option>
           <option value="ar">العربية</option>
           <option value="es">Español</option>
@@ -57,7 +57,8 @@ try { $("lang").value = localStorage.getItem("fhemniLang") || "fr"; } catch (e) 
 function status(text, kind) { $("status").textContent = text; $("status").className = "status " + (kind || ""); }
 function lang() { return $("lang").value; }
 function session() { return $("session").value.trim().toLowerCase(); }
-function textOf(line) { return line.texts[lang()] || line.texts.fr || ""; }
+// La langue choisie si elle a été traduite, sinon le texte original (première clé = langue parlée)
+function textOf(line) { return line.texts[lang()] || Object.values(line.texts)[0] || ""; }
 function dir() { return lang() === "ar" ? "rtl" : "ltr"; }
 
 function render() {

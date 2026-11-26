@@ -13,7 +13,7 @@
 <header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Espace professeur</span></div></header>
 <main>
   <h1>Tableau de bord du cours</h1>
-  <p class="sub">Parlez en français : les étudiants reçoivent la traduction en direct sur leur téléphone.</p>
+  <p class="sub">Choisissez la langue dans laquelle vous parlez : chaque étudiant reçoit le cours en direct dans sa langue.</p>
   <div class="grid">
     <div>
       <div class="card">
@@ -22,8 +22,15 @@
         <input id="session" type="text" autocomplete="off">
         <label for="code">Code professeur</label>
         <input id="code" type="password" autocomplete="off" placeholder="fourni par l'équipe Fhemni">
-        <label>Langues de traduction</label>
+        <label for="srcLang">Langue parlée par le professeur</label>
+        <select id="srcLang">
+          <option value="fr-FR">Français</option>
+          <option value="en-US">Anglais</option>
+          <option value="ar-MA">Darija (arabe du Maroc)</option>
+        </select>
+        <label>Langues proposées aux étudiants</label>
         <div class="langs" id="langs">
+          <label><input type="checkbox" value="fr" checked> Français</label>
           <label><input type="checkbox" value="en" checked> Anglais</label>
           <label><input type="checkbox" value="ar" checked> Arabe</label>
           <label><input type="checkbox" value="es" checked> Espagnol</label>
@@ -65,11 +72,17 @@ let recognizer = null, tokenTimer = null, running = false, retries = 0, reconnec
 const d = new Date();
 $("session").value = `cours-${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${Math.random().toString(36).slice(2, 5)}`;
 try { $("code").value = sessionStorage.getItem("fhemniProfCode") || ""; } catch (e) {}
+try { $("srcLang").value = localStorage.getItem("fhemniSrcLang") || "fr-FR"; } catch (e) {}
+$("srcLang").addEventListener("change", () => { try { localStorage.setItem("fhemniSrcLang", srcLang()); } catch (e) {} });
 
 function status(text, kind) { $("status").textContent = text; $("status").className = "status " + (kind || ""); }
 function session() { return $("session").value.trim().toLowerCase(); }
 function headers() { return { "Content-Type": "application/json", "x-prof-code": $("code").value }; }
-function targets() { return [...document.querySelectorAll("#langs input:checked")].map(i => i.value); }
+// Langue parlée par le professeur (ex. "en-US") et son code court (ex. "en")
+function srcLang() { return $("srcLang").value || "fr-FR"; }
+function srcBase() { return srcLang().split("-")[0]; }
+// Langues de traduction : celles cochées, sauf la langue parlée (qui est le texte original)
+function targets() { return [...document.querySelectorAll("#langs input:checked")].map(i => i.value).filter(l => l !== srcBase()); }
 
 function showStudentLink() {
   const url = new URL("etudiant.html", location.href);
@@ -95,16 +108,18 @@ function sendCaption(texts, partial) {
 }
 
 function collect(result, SDK) {
-  const texts = { fr: result.text };
+  // Le texte original est rangé sous la langue parlée ; il est toujours la première clé
+  const texts = { [srcBase()]: result.text };
   targets().forEach(l => { texts[l] = result.translations.get(l) || ""; });
   return texts;
 }
 
 function addHistory(texts) {
+  const [src, ...others] = Object.keys(texts);
   const p = document.createElement("p");
-  p.innerHTML = `<span></span>` + Object.keys(texts).filter(k => k !== "fr")
+  p.innerHTML = `<span dir="${src === "ar" ? "rtl" : "ltr"}"></span>` + others
     .map(k => `<small dir="${k === "ar" ? "rtl" : "ltr"}" data-l="${k}"></small>`).join("");
-  p.querySelector("span").textContent = texts.fr;
+  p.querySelector("span").textContent = texts[src];
   p.querySelectorAll("small").forEach(s => { s.textContent = `${s.dataset.l} : ${texts[s.dataset.l]}`; });
   $("history").prepend(p);
 }
@@ -113,7 +128,7 @@ $("start").onclick = () => {
   if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Code du cours : 3 à 40 caractères (minuscules, chiffres, tirets).", "err");
   try { sessionStorage.setItem("fhemniProfCode", $("code").value); } catch (e) {}
   running = true; retries = 0;
-  $("start").disabled = true; $("stop").disabled = false;
+  $("start").disabled = true; $("stop").disabled = false; $("srcLang").disabled = true;
   startRecognition();
 };
 
@@ -136,7 +151,7 @@ async function startRecognition() {
     const t = await getToken().catch(e => { e.fatal = /professeur/i.test(e.message); throw e; });
     const SDK = window.SpeechSDK;
     const config = SDK.SpeechTranslationConfig.fromAuthorizationToken(t.token, t.region);
-    config.speechRecognitionLanguage = "fr-FR";
+    config.speechRecognitionLanguage = srcLang();   // fr-FR, en-US ou ar-MA
     // Silence nécessaire pour clore une phrase : 1,3 s au lieu de ~0,5 s par défaut,
     // pour ne plus couper la phrase quand le professeur reprend son souffle.
     config.setProperty(SDK.PropertyId.Speech_SegmentationSilenceTimeoutMs, "1300");
@@ -177,7 +192,7 @@ function stop() {
   clearInterval(tokenTimer);
   const r = recognizer; recognizer = null;
   if (r) r.stopContinuousRecognitionAsync(() => r.close(), () => r.close());
-  $("start").disabled = false; $("stop").disabled = true;
+  $("start").disabled = false; $("stop").disabled = true; $("srcLang").disabled = false;
 }
 $("stop").onclick = () => { stop(); status("En pause."); };
 
@@ -190,7 +205,7 @@ $("end").onclick = async () => {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     status("Résumé envoyé aux étudiants : " + Object.entries(data.languages).map(([k, v]) => `${k} ${v}`).join(", "), "ok");
-    const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=fr`).then(x => x.json());
+    const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${srcBase()}`).then(x => x.json());
     $("summary").textContent = s.summary || "Résumé vide : la transcription est peut-être trop courte.";
     $("summaryCard").hidden = false;
   } catch (e) { status("Résumé impossible : " + e.message, "err"); }
