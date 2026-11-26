@@ -56,3 +56,13 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 #qr img, #qr canvas { background: #fff; padding: 8px; border-radius: 10px; }
 a { color: var(--navy-2); } @media (prefers-color-scheme: dark) { a { color: var(--gold); } }
 .small { font-size: .82rem; word-break: break-all; }
+.hint { color: var(--muted); font-size: .85rem; margin: 8px 0 0; }
+.history .keep { display: inline; margin: 0 8px 0 0; font-weight: 400; }
+.history p.excluded { opacity: .45; text-decoration: line-through; }
+.history p.mark { font-style: italic; color: var(--muted); border-left-color: var(--muted); background: transparent; }
+a.btn { display: inline-block; padding: 10px 16px; border-radius: 10px; background: var(--navy); color: #fff;
+        text-decoration: none; font-weight: 600; font-size: .95rem; }
+@media (prefers-color-scheme: dark) { a.btn { color: #fff; background: var(--navy-2); } }
+.paused { background: rgba(201,162,39,.16); border: 1px solid var(--gold); color: var(--ink); padding: 10px 12px;
+          border-radius: 10px; margin-bottom: 12px; font-weight: 600; }
+[hidden] { display: none !important; }

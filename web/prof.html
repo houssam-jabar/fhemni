@@ -1,64 +1,70 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fhemni – Professeur</title>
+  <title>Fhemni – Teacher</title>
   <link rel="stylesheet" href="style.css">
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@1.53.0/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
-<header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Espace professeur</span></div></header>
+<header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Teacher space</span></div></header>
 <main>
-  <h1>Tableau de bord du cours</h1>
-  <p class="sub">Choisissez la langue dans laquelle vous parlez : chaque étudiant reçoit le cours en direct dans sa langue.</p>
+  <h1>Lecture dashboard</h1>
+  <p class="sub">Choose the language you speak: every student follows the lecture live in their own language.</p>
   <div class="grid">
     <div>
       <div class="card">
         <h2>Session</h2>
-        <label for="session">Code du cours</label>
+        <label for="session">Lecture code</label>
         <input id="session" type="text" autocomplete="off">
-        <label for="code">Code professeur</label>
-        <input id="code" type="password" autocomplete="off" placeholder="fourni par l'équipe Fhemni">
-        <label for="srcLang">Langue parlée par le professeur</label>
+        <label for="code">Teacher code</label>
+        <input id="code" type="password" autocomplete="off" placeholder="provided by the Fhemni team">
+        <label for="srcLang">Language you speak</label>
         <select id="srcLang">
-          <option value="fr-FR">Français</option>
-          <option value="en-US">Anglais</option>
-          <option value="ar-MA">Darija (arabe du Maroc)</option>
+          <option value="fr-FR">French</option>
+          <option value="en-US">English</option>
+          <option value="ar-MA">Darija (Moroccan Arabic)</option>
         </select>
-        <label>Langues proposées aux étudiants</label>
+        <label>Languages offered to students</label>
         <div class="langs" id="langs">
-          <label><input type="checkbox" value="fr" checked> Français</label>
-          <label><input type="checkbox" value="en" checked> Anglais</label>
-          <label><input type="checkbox" value="ar" checked> Arabe</label>
-          <label><input type="checkbox" value="es" checked> Espagnol</label>
-          <label><input type="checkbox" value="de"> Allemand</label>
-          <label><input type="checkbox" value="zh-Hans"> Chinois</label>
+          <label><input type="checkbox" value="fr" checked> French</label>
+          <label><input type="checkbox" value="en" checked> English</label>
+          <label><input type="checkbox" value="ar" checked> Arabic</label>
+          <label><input type="checkbox" value="es" checked> Spanish</label>
+          <label><input type="checkbox" value="de"> German</label>
+          <label><input type="checkbox" value="zh-Hans"> Chinese</label>
         </div>
         <div class="row">
-          <button class="primary" id="start">Démarrer</button>
+          <button class="primary" id="start">Start</button>
           <button id="stop" disabled>Pause</button>
         </div>
-        <div class="row"><button class="gold" id="end">Terminer et générer le résumé</button></div>
-        <p class="status" id="status">Prêt.</p>
+        <p class="hint">Tip: press the Space bar to pause or resume. While paused, nothing is heard or recorded.</p>
+        <div class="row"><button class="gold" id="end">End lecture and create the summary</button></div>
+        <p class="status" id="status">Ready.</p>
       </div>
       <div class="card">
-        <h2>Accès étudiants</h2>
+        <h2>Student access</h2>
         <div id="qr"></div>
         <p class="small"><a id="studentLink" target="_blank"></a></p>
       </div>
     </div>
     <div>
       <div class="card">
-        <h2>En direct</h2>
+        <h2>Live</h2>
         <div class="partial" id="partial">—</div>
+        <p class="hint">Untick any sentence you do not want in the summary and the notebook (a phone call, a private chat, a recognition error).</p>
         <div class="history" id="history"></div>
       </div>
       <div class="card" id="summaryCard" hidden>
-        <h2>Résumé du cours (AI Language)</h2>
+        <h2>Lecture summary (AI Language)</h2>
         <p class="summary" id="summary"></p>
+        <div class="row">
+          <a class="btn" id="dlNotebook" href="#">Download the notebook</a>
+          <button id="dlJson">Download the transcript (JSON)</button>
+        </div>
       </div>
     </div>
   </div>
@@ -67,10 +73,12 @@
 <script>
 const API = window.FHEMNI_API;
 const $ = id => document.getElementById(id);
-let recognizer = null, tokenTimer = null, running = false, retries = 0, reconnectPending = false, lastPartial = 0;
+let recognizer = null, tokenTimer = null, running = false, paused = false, retries = 0,
+    reconnectPending = false, lastPartial = 0, seq = 0;
+const excluded = new Set();   // sentences the teacher removed before the summary
 
 const d = new Date();
-$("session").value = `cours-${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${Math.random().toString(36).slice(2, 5)}`;
+$("session").value = `lecture-${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}-${Math.random().toString(36).slice(2, 6)}`;
 try { $("code").value = sessionStorage.getItem("fhemniProfCode") || ""; } catch (e) {}
 try { $("srcLang").value = localStorage.getItem("fhemniSrcLang") || "fr-FR"; } catch (e) {}
 $("srcLang").addEventListener("change", () => { try { localStorage.setItem("fhemniSrcLang", srcLang()); } catch (e) {} });
@@ -78,11 +86,12 @@ $("srcLang").addEventListener("change", () => { try { localStorage.setItem("fhem
 function status(text, kind) { $("status").textContent = text; $("status").className = "status " + (kind || ""); }
 function session() { return $("session").value.trim().toLowerCase(); }
 function headers() { return { "Content-Type": "application/json", "x-prof-code": $("code").value }; }
-// Langue parlée par le professeur (ex. "en-US") et son code court (ex. "en")
+// Language spoken by the teacher (e.g. "en-US") and its short code (e.g. "en")
 function srcLang() { return $("srcLang").value || "fr-FR"; }
 function srcBase() { return srcLang().split("-")[0]; }
-// Langues de traduction : celles cochées, sauf la langue parlée (qui est le texte original)
+// Translation targets: the ticked languages, except the spoken one (which is the original text)
 function targets() { return [...document.querySelectorAll("#langs input:checked")].map(i => i.value).filter(l => l !== srcBase()); }
+function newId() { seq += 1; return `${Date.now().toString(36)}-${seq}`; }
 
 function showStudentLink() {
   const url = new URL("etudiant.html", location.href);
@@ -94,45 +103,93 @@ function showStudentLink() {
 $("session").addEventListener("input", showStudentLink);
 showStudentLink();
 
+function setButtons() {
+  $("start").disabled = running; $("stop").disabled = !running;
+  $("start").textContent = paused ? "Resume" : "Start";
+  $("srcLang").disabled = running || paused;
+}
+
 async function getToken() {
   const r = await fetch(`${API}/speech-token`, { headers: headers() });
   if (!r.ok) throw new Error((await r.json()).error || r.statusText);
   return r.json();
 }
 
-function sendCaption(texts, partial) {
-  fetch(`${API}/caption`, { method: "POST", headers: headers(),
-    body: JSON.stringify({ session: session(), texts, partial: !!partial }) })
-    .then(async r => { if (!r.ok && !partial) status("Envoi refusé : " + ((await r.json()).error || r.status), "err"); })
-    .catch(e => { if (!partial) status("Envoi impossible : " + e.message, "err"); });
+function sendCaption(texts, partial, id) {
+  const body = { session: session(), texts, partial: !!partial };
+  if (!partial && id) body.id = id;
+  fetch(`${API}/caption`, { method: "POST", headers: headers(), body: JSON.stringify(body) })
+    .then(async r => { if (!r.ok && !partial) status("Sending refused: " + ((await r.json()).error || r.status), "err"); })
+    .catch(e => { if (!partial) status("Sending failed: " + e.message, "err"); });
+}
+
+function sendStatus(state) {   // tells the phones "paused" or "live", and marks the break in the transcript
+  return fetch(`${API}/status`, { method: "POST", headers: headers(),
+    body: JSON.stringify({ session: session(), state }) }).catch(() => {});
 }
 
 function collect(result, SDK) {
-  // Le texte original est rangé sous la langue parlée ; il est toujours la première clé
+  // The original text is stored under the spoken language; it is always the first key
   const texts = { [srcBase()]: result.text };
   targets().forEach(l => { texts[l] = result.translations.get(l) || ""; });
   return texts;
 }
 
-function addHistory(texts) {
+function addHistory(texts, id) {
   const [src, ...others] = Object.keys(texts);
   const p = document.createElement("p");
-  p.innerHTML = `<span dir="${src === "ar" ? "rtl" : "ltr"}"></span>` + others
-    .map(k => `<small dir="${k === "ar" ? "rtl" : "ltr"}" data-l="${k}"></small>`).join("");
+  p.innerHTML = `<label class="keep" title="Keep this sentence"><input type="checkbox" checked></label>`
+    + `<span dir="${src === "ar" ? "rtl" : "ltr"}"></span>`
+    + others.map(k => `<small dir="${k === "ar" ? "rtl" : "ltr"}" data-l="${k}"></small>`).join("");
   p.querySelector("span").textContent = texts[src];
-  p.querySelectorAll("small").forEach(s => { s.textContent = `${s.dataset.l} : ${texts[s.dataset.l]}`; });
+  p.querySelectorAll("small").forEach(s => { s.textContent = `${s.dataset.l}: ${texts[s.dataset.l]}`; });
+  p.querySelector("input").addEventListener("change", e => {
+    if (e.target.checked) { excluded.delete(id); p.classList.remove("excluded"); }
+    else { excluded.add(id); p.classList.add("excluded"); }
+  });
   $("history").prepend(p);
 }
 
+function addMark(text) {
+  const p = document.createElement("p"); p.className = "mark"; p.textContent = text; $("history").prepend(p);
+}
+
 $("start").onclick = () => {
-  if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Code du cours : 3 à 40 caractères (minuscules, chiffres, tirets).", "err");
+  if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Lecture code: 3 to 40 characters (lowercase letters, digits, hyphens).", "err");
   try { sessionStorage.setItem("fhemniProfCode", $("code").value); } catch (e) {}
-  running = true; retries = 0;
-  $("start").disabled = true; $("stop").disabled = false; $("srcLang").disabled = true;
-  startRecognition();
+  const resuming = paused;
+  running = true; paused = false; retries = 0; setButtons();
+  if (resuming && recognizer) {
+    // Resume on the same AI Speech connection: no new token, no reconnection delay
+    try {
+      recognizer.startContinuousRecognitionAsync(
+        () => { status("Live: speak into the microphone.", "ok"); sendStatus("live"); addMark("— resumed —"); },
+        err => reconnect("resume: " + err));
+    } catch (e) { recognizer = null; startRecognition(true); }
+  } else {
+    startRecognition(resuming);
+  }
 };
 
-// Reconnexion automatique si la connexion à AI Speech tombe (réseau, veille, jeton expiré)
+// Pause: AI Speech stops listening, but the connection and the lecture stay open
+function pause() {
+  if (!running) return;
+  running = false; paused = true; setButtons();
+  const r = recognizer;
+  if (r) { try { r.stopContinuousRecognitionAsync(() => {}, () => {}); } catch (e) {} }
+  $("partial").textContent = "—"; lastPartial = 0;
+  sendStatus("paused"); addMark("— paused —");
+  status("Paused: the microphone is off, nothing is heard or recorded.");
+}
+$("stop").onclick = pause;
+
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space" || ["INPUT", "SELECT", "TEXTAREA", "BUTTON", "A"].includes(document.activeElement.tagName)) return;
+  e.preventDefault();
+  if (running) pause(); else if (paused) $("start").click();
+});
+
+// Automatic reconnection if the AI Speech connection drops (network, sleep, expired token)
 function reconnect(reason) {
   if (!running || reconnectPending) return;
   reconnectPending = true;
@@ -141,74 +198,92 @@ function reconnect(reason) {
   if (old) { try { old.close(); } catch (e) {} }
   retries += 1;
   const delay = Math.min(1000 * retries, 10000);
-  status(`Connexion perdue (${reason}) : reprise dans ${delay / 1000} s…`, "err");
-  setTimeout(() => { reconnectPending = false; if (running) startRecognition(); }, delay);
+  status(`Connection lost (${reason}): retrying in ${delay / 1000} s…`, "err");
+  setTimeout(() => { reconnectPending = false; if (running) startRecognition(false); }, delay);
 }
 
-async function startRecognition() {
-  status("Connexion à AI Speech…");
+async function startRecognition(resumed) {
+  status("Connecting to AI Speech…");
   try {
-    const t = await getToken().catch(e => { e.fatal = /professeur/i.test(e.message); throw e; });
+    const t = await getToken().catch(e => { e.fatal = /teacher/i.test(e.message); throw e; });
     const SDK = window.SpeechSDK;
     const config = SDK.SpeechTranslationConfig.fromAuthorizationToken(t.token, t.region);
-    config.speechRecognitionLanguage = srcLang();   // fr-FR, en-US ou ar-MA
-    // Silence nécessaire pour clore une phrase : 1,3 s au lieu de ~0,5 s par défaut,
-    // pour ne plus couper la phrase quand le professeur reprend son souffle.
+    config.speechRecognitionLanguage = srcLang();   // fr-FR, en-US or ar-MA
+    // 1.3 s of silence ends a sentence (instead of ~0.5 s by default),
+    // so sentences are no longer cut when the teacher takes a breath.
     config.setProperty(SDK.PropertyId.Speech_SegmentationSilenceTimeoutMs, "1300");
     targets().forEach(l => config.addTargetLanguage(l));
     recognizer = new SDK.TranslationRecognizer(config, SDK.AudioConfig.fromDefaultMicrophoneInput());
 
-    // Phrase en cours : affichée ici et envoyée aux téléphones au plus une fois par seconde
+    // Sentence in progress: shown here and sent to the phones at most once per second
     recognizer.recognizing = (s, e) => {
+      if (!running) return;
       $("partial").textContent = e.result.text;
       const now = Date.now();
       if (now - lastPartial > 1000 && e.result.text) { lastPartial = now; sendCaption(collect(e.result, SDK), true); }
     };
-    // Phrase définitive : historique + transcription
+    // Final sentence: history + transcript
     recognizer.recognized = (s, e) => {
       if (e.result.reason !== SDK.ResultReason.TranslatedSpeech || !e.result.text) return;
-      const texts = collect(e.result, SDK);
+      const texts = collect(e.result, SDK), id = newId();
       $("partial").textContent = "—"; lastPartial = 0;
-      addHistory(texts); sendCaption(texts, false);
+      addHistory(texts, id); sendCaption(texts, false, id);
     };
     recognizer.canceled = (s, e) => { if (e.reason === SDK.CancellationReason.Error) reconnect("code " + e.errorCode); };
-    recognizer.sessionStopped = () => { if (running) reconnect("session terminée"); };
+    recognizer.sessionStopped = () => { if (running) reconnect("session stopped"); };
 
+    clearInterval(tokenTimer);   // the token expires after 10 min: renewed every 9 min, also during a pause
     tokenTimer = setInterval(async () => {
       try { if (recognizer) recognizer.authorizationToken = (await getToken()).token; } catch (e) { console.warn(e); }
     }, 9 * 60 * 1000);
 
     recognizer.startContinuousRecognitionAsync(
-      () => { retries = 0; status("En direct : parlez dans le micro.", "ok"); },
-      err => reconnect("démarrage : " + err));
+      () => {
+        retries = 0; status("Live: speak into the microphone.", "ok");
+        if (resumed) { sendStatus("live"); addMark("— resumed —"); }
+      },
+      err => reconnect("start: " + err));
   } catch (e) {
-    if (e.fatal) { stop(); return status("Erreur : " + e.message, "err"); }
+    if (e.fatal) { stop(); return status("Error: " + e.message, "err"); }
     reconnect(e.message);
   }
 }
 
 function stop() {
-  running = false;
+  running = false; paused = false;
   clearInterval(tokenTimer);
   const r = recognizer; recognizer = null;
-  if (r) r.stopContinuousRecognitionAsync(() => r.close(), () => r.close());
-  $("start").disabled = false; $("stop").disabled = true; $("srcLang").disabled = false;
+  if (r) { try { r.stopContinuousRecognitionAsync(() => r.close(), () => r.close()); } catch (e) {} }
+  setButtons();
 }
-$("stop").onclick = () => { stop(); status("En pause."); };
 
 $("end").onclick = async () => {
   stop();
-  status("Génération du résumé par AI Language…");
+  status("Creating the summary and the notebooks with AI Language…");
   try {
     const r = await fetch(`${API}/end-session`, { method: "POST", headers: headers(),
-      body: JSON.stringify({ session: session() }) });
+      body: JSON.stringify({ session: session(), exclude: [...excluded],
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone }) });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
-    status("Résumé envoyé aux étudiants : " + Object.entries(data.languages).map(([k, v]) => `${k} ${v}`).join(", "), "ok");
+    status("Summary and notebook sent to the students: " + Object.entries(data.languages).map(([k, v]) => `${k} ${v}`).join(", "), "ok");
     const s = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${srcBase()}`).then(x => x.json());
-    $("summary").textContent = s.summary || "Résumé vide : la transcription est peut-être trop courte.";
+    $("summary").textContent = s.summary || "Empty summary: the transcript may be too short.";
+    $("dlNotebook").href = `${API}/notebook?session=${encodeURIComponent(session())}&lang=${srcBase()}`;
     $("summaryCard").hidden = false;
-  } catch (e) { status("Résumé impossible : " + e.message, "err"); }
+  } catch (e) { status("Summary failed: " + e.message, "err"); }
+};
+
+// Raw transcript (all languages, JSON Lines): protected by the teacher code, so it is fetched then saved
+$("dlJson").onclick = async () => {
+  try {
+    const r = await fetch(`${API}/transcript?session=${encodeURIComponent(session())}`, { headers: headers() });
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const url = URL.createObjectURL(new Blob([await r.text()], { type: "application/x-ndjson" }));
+    const a = document.createElement("a"); a.href = url; a.download = `fhemni-${session()}-transcript.jsonl`;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) { status("Transcript unavailable: " + e.message, "err"); }
 };
 </script>
 </body>

@@ -1,22 +1,22 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fhemni – Étudiant</title>
+  <title>Fhemni – Student</title>
   <link rel="stylesheet" href="style.css">
   <script src="config.js"></script>
 </head>
 <body>
-<header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Espace étudiant</span></div></header>
+<header class="topbar"><div class="in"><span class="brand">UIR · <b>Fhemni</b></span><span class="tag">Student space</span></div></header>
 <main>
   <div class="grid">
     <div>
       <div class="card">
-        <h2>Rejoindre un cours</h2>
-        <label for="session">Code du cours</label>
-        <input id="session" type="text" autocomplete="off">
-        <label for="lang">Ma langue</label>
+        <h2>Join a lecture</h2>
+        <label for="session">Lecture code</label>
+        <input id="session" type="text" autocomplete="off" placeholder="given by your teacher">
+        <label for="lang">My language</label>
         <select id="lang">
           <option value="fr">Français</option>
           <option value="en">English</option>
@@ -25,20 +25,22 @@
           <option value="de">Deutsch</option>
           <option value="zh-Hans">中文</option>
         </select>
-        <div class="row"><button class="primary" id="join">Rejoindre</button><button id="sumBtn">Voir le résumé</button></div>
-        <p class="status" id="status">Non connecté.</p>
+        <div class="row"><button class="primary" id="join">Join</button><button id="sumBtn">Show the summary</button></div>
+        <p class="status" id="status">Not connected.</p>
       </div>
     </div>
     <div>
       <div class="card">
-        <h2>Sous-titres en direct</h2>
-        <div class="live" id="live">En attente du professeur…</div>
+        <h2>Live captions</h2>
+        <div class="paused" id="pausedBanner" hidden>Lecture paused by the teacher. Captions will resume automatically.</div>
+        <div class="live" id="live">Waiting for the teacher…</div>
         <div class="partial" id="partial"></div>
         <div class="history" id="history"></div>
       </div>
       <div class="card" id="summaryCard" hidden>
-        <h2>Résumé du cours</h2>
+        <h2>Lecture summary</h2>
         <p class="summary" id="summary"></p>
+        <div class="row"><a class="btn" id="dlNotebook" href="#">Download the lecture notebook</a></div>
       </div>
     </div>
   </div>
@@ -52,19 +54,19 @@ let ws = null, wanted = false, retry = 1000, partialLine = null;
 
 const params = new URLSearchParams(location.search);
 $("session").value = params.get("s") || "";
-try { $("lang").value = localStorage.getItem("fhemniLang") || "fr"; } catch (e) {}
+try { $("lang").value = localStorage.getItem("fhemniLang") || "en"; } catch (e) {}
 
 function status(text, kind) { $("status").textContent = text; $("status").className = "status " + (kind || ""); }
 function lang() { return $("lang").value; }
 function session() { return $("session").value.trim().toLowerCase(); }
-// La langue choisie si elle a été traduite, sinon le texte original (première clé = langue parlée)
+// The chosen language if it was translated, otherwise the original text (first key = spoken language)
 function textOf(line) { return line.texts[lang()] || Object.values(line.texts)[0] || ""; }
 function dir() { return lang() === "ar" ? "rtl" : "ltr"; }
 
 function render() {
   ["live", "partial", "history", "summary"].forEach(id => { $(id).dir = dir(); });
   const last = lines.at(-1);
-  $("live").textContent = last ? textOf(last) : "En attente du professeur…";
+  $("live").textContent = last ? textOf(last) : "Waiting for the teacher…";
   $("partial").textContent = partialLine ? textOf(partialLine) : "";
   $("history").innerHTML = "";
   lines.slice(0, -1).reverse().slice(0, 30).forEach(l => {
@@ -72,46 +74,50 @@ function render() {
   });
 }
 
+function setPaused(on) { $("pausedBanner").hidden = !on; if (on) { partialLine = null; render(); } }
+
 async function loadSummary(manual) {
   if (!session()) return;
   try {
     const r = await fetch(`${API}/summary?session=${encodeURIComponent(session())}&lang=${encodeURIComponent(lang())}`);
-    if (!r.ok) { if (manual) status("Le résumé n'est pas encore disponible.", "err"); return; }
+    if (!r.ok) { if (manual) status("The summary is not available yet.", "err"); return; }
     const { summary } = await r.json();
-    $("summary").textContent = summary || "Résumé indisponible dans cette langue.";
-    $("summaryCard").hidden = false; render();
-  } catch (e) { if (manual) status("Résumé impossible : " + e.message, "err"); }
+    $("summary").textContent = summary || "Summary unavailable in this language.";
+    $("dlNotebook").href = `${API}/notebook?session=${encodeURIComponent(session())}&lang=${encodeURIComponent(lang())}`;
+    $("summaryCard").hidden = false; setPaused(false); render();
+  } catch (e) { if (manual) status("Could not load the summary: " + e.message, "err"); }
 }
 
 async function connect() {
-  status("Connexion…");
+  status("Connecting…");
   try {
     const r = await fetch(`${API}/negotiate?session=${encodeURIComponent(session())}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     ws = new WebSocket(data.url, "json.webpubsub.azure.v1");
-    ws.onopen = () => { retry = 1000; status("En direct : cours " + session(), "ok"); render(); loadSummary(false); };
+    ws.onopen = () => { retry = 1000; status("Live: lecture " + session(), "ok"); render(); loadSummary(false); };
     ws.onmessage = ev => {
       const msg = JSON.parse(ev.data);
       if (msg.type !== "message" || msg.from !== "group") return;
       const data = msg.data;
-      if (data.type === "partial") { partialLine = data; render(); }
-      if (data.type === "caption") { partialLine = null; lines.push(data); render(); }
+      if (data.type === "partial") { setPaused(false); partialLine = data; render(); }
+      if (data.type === "caption") { setPaused(false); partialLine = null; lines.push(data); render(); }
+      if (data.type === "status") setPaused(data.state === "paused");
       if (data.type === "summary-ready") loadSummary(false);
     };
     ws.onclose = () => {
       if (!wanted) return;
-      status("Connexion perdue, reconnexion…", "err");
+      status("Connection lost, reconnecting…", "err");
       setTimeout(connect, retry); retry = Math.min(retry * 2, 15000);
     };
   } catch (e) {
-    status("Impossible de rejoindre : " + e.message, "err");
+    status("Could not join: " + e.message, "err");
     if (wanted) { setTimeout(connect, retry); retry = Math.min(retry * 2, 15000); }
   }
 }
 
 $("join").onclick = () => {
-  if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Entrez le code du cours donné par le professeur.", "err");
+  if (!/^[a-z0-9-]{3,40}$/.test(session())) return status("Enter the lecture code given by your teacher.", "err");
   wanted = true; if (ws) { ws.onclose = null; ws.close(); } connect();
 };
 $("sumBtn").onclick = () => loadSummary(true);
